@@ -95,7 +95,7 @@ matching firmware:
 | Generic HID — Space | Camera, webcam, stop-motion and tethering software accepting Space | Bluetooth keyboard `Space` | Map Space to Capture/Shutter |
 | DJI | DJI Osmo Action 4, Osmo Action 5 Pro, Osmo Action 6 and Osmo 360 | Official DJI BLE camera protocol | Put the camera in Photo mode and approve pairing on its screen |
 | GoPro | HERO9 Black, HERO10 Black/Bones, HERO11 Black/Mini and HERO12 Black; newer Open GoPro models require LayerShot validation | Official Open GoPro BLE API | Put the camera in Photo mode and open its Connect Device screen |
-| Insta360 — experimental | X3, X4, X5, Ace, Ace Pro and Ace Pro 2 families | Experimental emulation of an Insta360 GPS Bluetooth remote | Compatibility depends on the exact camera firmware; test before printing |
+| Insta360 — experimental | X3, X4, X5, Ace, Ace Pro and Ace Pro 2 families | X-series: emulation of an Insta360 GPS Bluetooth remote (CE80); Ace/Ace Pro: direct BLE control of the camera's BE80 command service | Compatibility depends on the exact camera firmware; test before printing |
 
 > **DJI validation:** DJI camera support has been successfully validated by a
 > LayerShot user on compatible hardware. Testing the shutter before a long
@@ -258,10 +258,29 @@ Bluetooth settings before pairing again.
 
 ### Insta360 — experimental
 
+The Insta360 firmware uses two different Bluetooth protocols and picks the
+right one automatically:
+
+**X-series (X3, X4, X5, ONE RS):**
+
 1. Open **Settings > Bluetooth Remote** on the camera.
 2. Select **Insta360 GPS Remote**, then start pairing in LayerShot.
 3. Keep the camera in Photo mode and test the shutter before printing.
 4. Report the exact camera model and firmware version when providing feedback.
+
+**Ace / Ace Pro (direct control):**
+
+1. Power on the camera — no on-camera pairing menu is needed.
+2. The ESP32 scans for the camera's `Ace Pro` / `Ace` Bluetooth advertisement
+   and connects to it automatically.
+3. Keep the camera in Photo mode and test the shutter before printing.
+
+The connection direction differs between the two families: X-series cameras
+connect *to* the ESP32 (which emulates the Insta360 GPS Remote), while the
+ESP32 connects *to* an Ace camera (which exposes Insta360's direct-control
+Bluetooth service). The firmware keeps the GPS-remote emulation advertising
+for X-series cameras while scanning for Ace cameras, so either family can be
+used without reflashing.
 
 ## LED colours
 
@@ -413,6 +432,74 @@ and Insta360 sources are in `firmware/Hackman3DLayerShotGoPro` and
 `firmware/Hackman3DLayerShotInsta360`. They target an ESP32-C3 with 4 MB flash.
 The desktop app embeds the ready-to-flash images and chooses the correct one
 from the camera selection.
+
+## CyberBrick PWM trigger (Insta360 firmware)
+
+The experimental Insta360 firmware supports an external **PWM trigger input**
+that lets a CyberBrick servo signal fire the Insta360 shutter without going
+through Moonraker or the desktop app.  This is useful when the printer's servo
+already signals the shutter moment and you want the ESP32-C3 to act on it
+directly.
+
+### Wiring
+
+Connect the CyberBrick servo port to the ESP32-C3:
+
+```
+CyberBrick Servo Port        ESP32-C3
+─────────────────────        ─────────
+S   (signal)          ──→   GPIO4
+GND                  ──→   GND
+```
+
+> **Voltage warning:** ESP32-C3 GPIO pins are **not 5 V tolerant**.  If the
+> CyberBrick servo `S` line is 5 V logic, you **must** use a voltage divider or
+> level shifter before connecting it to GPIO4.  A simple resistor divider
+> (e.g. 10 kΩ + 20 kΩ) bringing 5 V down to ~3.3 V is sufficient.
+
+### How it works
+
+The firmware reads the standard 50 Hz servo PWM (20 ms period, 500–2500 µs
+pulse width) on GPIO4 using a hardware interrupt and `micros()`.  When the pulse
+width exceeds the trigger threshold (default 1500 µs), `triggerShutter()` is
+called exactly once.  A **5-second non-blocking cooldown** then ignores all
+further PWM input, so a continuous servo signal never causes rapid-fire photos.
+The BOOT button, BLE pairing, LED indication and all existing functionality
+remain unchanged — PWM is an additional trigger source, not a replacement.
+
+### Configuration
+
+All PWM settings are grouped near the top of
+`firmware/Hackman3DLayerShotInsta360/Hackman3DLayerShotInsta360.ino`:
+
+```cpp
+static const uint8_t  PWM_TRIGGER_PIN          = 4;     // GPIO pin
+static const uint32_t PWM_TRIGGER_THRESHOLD_US = 1500; // trigger above this
+static const uint32_t PWM_TRIGGER_MIN_US       = 500;   // reject noise below
+static const uint32_t PWM_TRIGGER_MAX_US       = 2500;  // reject noise above
+static const uint32_t PWM_TRIGGER_COOLDOWN_MS  = 5000;  // lockout after trigger
+static const uint32_t PWM_STARTUP_GRACE_MS     = 3000;  // ignore at boot
+```
+
+Change these values and recompile to adjust the GPIO pin, trigger threshold, or
+cooldown duration.
+
+### Testing
+
+1. Flash the Insta360 firmware and pair the camera as usual.
+2. Connect the CyberBrick servo `S` line to GPIO4 (via level shifter if 5 V).
+3. Open the serial monitor at 115200 baud.
+4. At boot you will see `PWM trigger: armed after startup grace`, then
+   `PWM trigger re-armed` after the 3-second startup grace.
+5. Move the CyberBrick servo to the shutter position.  You should see:
+   ```
+   PWM shutter triggered (pulse: 1980 us)
+   PWM trigger ignored: cooldown (5 s)
+   ```
+6. The Insta360 takes one photo.  No further photos occur for 5 seconds even if
+   the servo stays in position.
+7. After cooldown, `PWM trigger re-armed` appears and the next shutter motion
+   fires one more photo.
 
 ## Third-party components
 
