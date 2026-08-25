@@ -56,7 +56,7 @@
     },
     "insta360": {
       "latest": {
-        "version": "2.2.1-insta360-exp",
+        "version": "2.3.0-insta360-ace",
         "url": "https://github.com/HackMan3D/Hackman3D-LayerShot/releases/download/v1.2.9/Hackman3D-LayerShot-ESP32-C3-Insta360-Experimental.bin"
       },
       "history": [

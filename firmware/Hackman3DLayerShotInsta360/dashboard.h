@@ -26,16 +26,16 @@ footer{text-align:center;color:#727d8e;margin-top:24px}@media(max-width:720px){.
 <div class="metrics"><div class="metric"><small>Réseau</small><strong id="ssid">—</strong></div><div class="metric"><small>Adresse IP</small><strong id="ip">—</strong></div><div class="metric"><small>Signal</small><strong id="rssi">—</strong></div></div>
 <form id="wifiForm"><label>Nouveau réseau Wi-Fi</label><input name="ssid" required placeholder="Nom du réseau"><label>Mot de passe</label><div class="row"><input id="wifiPassword" name="password" type="password" placeholder="Mot de passe"><button type="button" onclick="togglePassword()">Afficher</button></div><div class="actions"><button class="primary">Enregistrer et redémarrer</button></div></form></article>
 	<article class="card"><div class="title"><h2>Caméra · <span id="cameraName">—</span></h2><span class="badge" id="bleBadge">…</span></div>
-	<p class="help" id="pairingHelp">Chargement des instructions d’appairage…</p>
-	<div class="actions"><button class="primary" onclick="post('/pair')">Démarrer l’appairage</button><button onclick="post('/trigger')">Tester l’obturateur</button><button onclick="post('/led-test')">Tester la LED</button><button class="danger" onclick="post('/reset-bonds')">Oublier la caméra</button></div></article>
+	<p class="help" id="pairingHelp">Connexion à la caméra…</p>
+	<div class="actions"><button class="primary" onclick="post('/pair')">Relancer la recherche</button><button onclick="post('/trigger')">Tester l'obturateur</button><button onclick="post('/led-test')">Tester la LED</button><button class="danger" onclick="post('/reset-bonds')">Oublier la caméra</button></div></article>
 <article class="card wide"><div class="title"><h2>Imprimante et détection des couches</h2><span class="badge" id="printerBadge">…</span></div>
 <div class="metrics"><div class="metric"><small>État</small><strong id="printerState">—</strong></div><div class="metric"><small>Couche</small><strong id="layer">—</strong></div><div class="metric"><small>Déclenchements</small><strong id="triggers">0</strong></div></div>
 <p class="help">Dernière commande reçue : <b id="lastCommand">—</b> · Total des commandes : <b id="commands">0</b></p>
-<form id="printerForm"><div class="row"><div><label>Adresse de l’imprimante</label><input name="host" id="printerHost" required placeholder="192.0.2.51"></div><div><label>Port</label><input name="port" id="printerPort" type="number" value="4408"></div></div>
+<form id="printerForm"><div class="row"><div><label>Adresse de l'imprimante</label><input name="host" id="printerHost" required placeholder="192.0.2.51"></div><div><label>Port</label><input name="port" id="printerPort" type="number" value="4408"></div></div>
 <label>Délai avant la photo</label><select name="delay" id="shutterDelay"><option value="1000">1 s</option><option value="2000">2 s</option><option value="3000">3 s</option><option value="4000">4 s</option><option value="5000">5 s</option></select>
 <input type="hidden" name="every" value="1"><input type="hidden" name="skip" value="0"><input type="hidden" name="stop" value="0">
 <div class="actions"><button class="primary">Enregistrer</button><button type="button" onclick="post('/printer-test')">Tester la détection</button></div></form></article>
-</section><div class="message" id="message"></div><footer>Créé, designé et codé par Hackman3D · Firmware <span id="firmware">—</span></footer>
+</section><div class="message" id="message"></div><footer>Créé, designé et codé par HackMan3D · Firmware <span id="firmware">—</span></footer>
 </main><script>
 const $=id=>document.getElementById(id);const say=t=>$('message').textContent=t;
 function togglePassword(){let p=$('wifiPassword');p.type=p.type==='password'?'text':'password'}
@@ -43,8 +43,8 @@ async function post(url,data){try{let r=await fetch(url,{method:'POST',headers:{
 async function refresh(){try{let s=await (await fetch('/status',{cache:'no-store'})).json();
 	$('identity').textContent=s.hostname+' · '+s.ip;$('firmware').textContent=s.firmware;$('ssid').textContent=s.ssid||'Non configuré';$('ip').textContent=s.ip;$('rssi').textContent=s.wifi?(s.rssi+' dBm'):'—';
 	$('wifiBadge').textContent=s.wifi?'Connecté':'Déconnecté';$('wifiBadge').className='badge '+(s.wifi?'ok':'bad');
-	$('cameraName').textContent=s.camera_name||'Smartphone';$('bleBadge').textContent=s.bluetooth?'Caméra connectée':(s.pairing?'Appairage actif':'Déconnectée');$('bleBadge').className='badge '+(s.bluetooth?'ok':'bad');
-	$('pairingHelp').innerHTML='<b>Mode expérimental.</b> Sur la caméra, ouvrez Réglages › Télécommande Bluetooth et sélectionnez <b>Insta360 GPS Remote</b>. Bouton BOOT : appui court = photo, 3 secondes = appairage, 10 secondes = oubli.';
+	$('cameraName').textContent=s.camera_name||'Insta360';$('bleBadge').textContent=s.bluetooth?'Caméra connectée':(s.scanning?'Recherche…':'Déconnectée');$('bleBadge').className='badge '+(s.bluetooth?'ok':'bad');
+	$('pairingHelp').innerHTML='<b>Mode expérimental.</b> La caméra Ace/Ace Pro se connecte automatiquement. Bouton BOOT : appui court = photo, 3 secondes = relancer la recherche, 10 secondes = oubli.';
 $('printerBadge').textContent=s.printer_connected?'Détectée':'Non détectée';$('printerBadge').className='badge '+(s.printer_connected?'ok':'bad');
 $('printerState').textContent=s.printer_state||'Inconnue';$('layer').textContent=s.current_layer>=0?(s.current_layer+(s.total_layers>0?' / '+s.total_layers:'')):'—';$('triggers').textContent=s.triggers;
 $('lastCommand').textContent=s.last_command||'—';$('commands').textContent=s.commands||0;
