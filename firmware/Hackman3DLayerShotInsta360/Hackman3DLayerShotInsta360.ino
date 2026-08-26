@@ -1,10 +1,10 @@
 #include <Arduino.h>
-#include <WiFi.h>
-#include <HTTPClient.h>
-#include <WebServer.h>
+#include <WiFi.h>  // kept for ESP32-C3 RF coexistence (shared radio)
+// #include <HTTPClient.h>    // WiFi disabled
+// #include <WebServer.h>     // WiFi disabled
 #include <Preferences.h>
-#include <ESPmDNS.h>
-#include <ArduinoOTA.h>
+// #include <ESPmDNS.h>       // WiFi disabled
+// #include <ArduinoOTA.h>    // WiFi disabled
 #include <NimBLEDevice.h>
 #include "dashboard.h"
 
@@ -54,7 +54,7 @@ bool be80ScanActive = false;
 NimBLEAddress be80PendingAddress;
 bool be80ConnectPending = false;
 
-WebServer web(80);
+// WebServer web(80);  // WiFi disabled
 Preferences preferences;
 bool wifiConnecting = false;
 bool wifiError = false;
@@ -110,10 +110,11 @@ String jsonEscape(const String &value) {
   return result;
 }
 
-void sendJSON(int status, const String &body) {
-  web.sendHeader("Access-Control-Allow-Origin", "*");
-  web.send(status, "application/json; charset=utf-8", body);
-}
+// WiFi disabled — sendJSON removed
+// void sendJSON(int status, const String &body) {
+//   web.sendHeader("Access-Control-Allow-Origin", "*");
+//   web.send(status, "application/json; charset=utf-8", body);
+// }
 
 void restartScan() {
   Serial.println("Scan restart requested");
@@ -194,7 +195,8 @@ void clearBluetoothBonds() {
 // state flags. Service discovery and BE82 subscription happen in loop().
 class CameraClientCallbacks : public NimBLEClientCallbacks {
   void onConnect(NimBLEClient *pClient) override {
-    Serial.println("BE80 client: connected, setting up...");
+    Serial.printf("BE80 client: connected (connHandle=%d, peer=%s), setting up...\n",
+                  pClient->getConnHandle(), pClient->getPeerAddress().toString().c_str());
     cameraMode = CAM_BE80_SETTING_UP;
   }
   void onConnectFail(NimBLEClient *pClient, int reason) override {
@@ -207,7 +209,8 @@ class CameraClientCallbacks : public NimBLEClientCallbacks {
     be80RetryDelay = min(be80RetryDelay * 2, BE80_RETRY_MAX_MS);
   }
   void onDisconnect(NimBLEClient *pClient, int reason) override {
-    Serial.printf("BE80 client: disconnected (reason=%d)\n", reason);
+    Serial.printf("BE80 client: disconnected (reason=%d, connHandle=%d)\n",
+                  reason, pClient->getConnHandle());
     cameraMode = CAM_NONE;
     be81Write = nullptr;
     be82Notify = nullptr;
@@ -297,8 +300,12 @@ void setupBe80Client() {
     return;
   }
   Serial.println("BE80 setup: discovering services...");
-  // Dump all services and characteristics for diagnostics.
+  uint32_t t0 = millis();
   const std::vector<NimBLERemoteService *> &services = cameraClient->getServices(true);
+  uint32_t discMs = millis() - t0;
+  Serial.printf("BE80 setup: getServices(true) took %lu ms, found %u service(s)\n",
+                (unsigned long)discMs, (unsigned)services.size());
+
   for (const auto &svc : services) {
     Serial.printf("  Service: %s\n", svc->getUUID().toString().c_str());
     const auto &chars = svc->getCharacteristics(true);
@@ -331,7 +338,9 @@ void setupBe80Client() {
     return;
   }
   Serial.println("BE80 setup: subscribing to BE82 notifications...");
-  if (!be82Notify->subscribe(true, onBe82Notify, true)) {
+  bool subOk = be82Notify->subscribe(true, onBe82Notify, true);
+  Serial.printf("BE80 setup: BE82 subscribe result = %s\n", subOk ? "true" : "false");
+  if (!subOk) {
     Serial.println("BE80 setup: BE82 subscribe failed");
     cameraClient->disconnect();
     cameraMode = CAM_NONE;
@@ -341,6 +350,7 @@ void setupBe80Client() {
 
   // Also subscribe to any other notify characteristics on the camera
   // (B002/B003/B004 on B000 service, AE02 on AE00 service).
+  int extraSubCount = 0;
   for (const auto &svc : services) {
     const auto &chars = svc->getCharacteristics();
     for (const auto &chr : chars) {
@@ -348,10 +358,14 @@ void setupBe80Client() {
         Serial.printf("BE80 setup: also subscribing to %s on %s\n",
                       chr->getUUID().toString().c_str(),
                       svc->getUUID().toString().c_str());
-        chr->subscribe(true, onBe82Notify, true);
+        bool ok = chr->subscribe(true, onBe82Notify, true);
+        Serial.printf("BE80 setup:   -> subscribe %s = %s\n",
+                      chr->getUUID().toString().c_str(), ok ? "true" : "false");
+        if (ok) extraSubCount++;
       }
     }
   }
+  Serial.printf("BE80 setup: subscribed to BE82 + %d extra notify char(s)\n", extraSubCount);
 
   Serial.println("BE80 setup: ready! BE81 write + BE82 notify active");
   cameraMode = CAM_BE80_CLIENT;
@@ -382,8 +396,9 @@ void maintainCameraClient() {
     }
     cameraClient->setPeerAddress(be80PendingAddress);
     cameraMode = CAM_BE80_CONNECTING;
-    Serial.println("BE80 client: initiating async connect...");
-    cameraClient->connect(true, true, true);
+    Serial.println("BE80 client: initiating sync connect...");
+    bool connResult = cameraClient->connect(true, false, true);
+    Serial.printf("BE80 client: connect() returned %s (sync)\n", connResult ? "true" : "false");
     return;
   }
 
@@ -402,135 +417,135 @@ void maintainCameraClient() {
   }
 }
 
-void pollPrinter();
+// void pollPrinter();  // WiFi disabled
 
-void setupWeb() {
-  web.on("/", HTTP_GET, [] {
-    web.send_P(200, "text/html; charset=utf-8", LAYERSHOT_DASHBOARD);
-  });
-  web.on("/status", HTTP_GET, [] {
-    String ip = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
-    String body = "{\"ok\":true,\"name\":\"" + String(DEVICE_NAME) + "\",\"firmware\":\"" +
-      FIRMWARE_VERSION + "\",\"hostname\":\"" + deviceHostname + ".local\",\"ip\":\"" + ip +
-      "\",\"ssid\":\"" + jsonEscape(WiFi.SSID()) + "\",\"rssi\":" + String(WiFi.RSSI()) +
-      ",\"wifi\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") +
-      ",\"camera_type\":\"" + jsonEscape(cameraType) + "\"" +
-      ",\"camera_name\":\"" + jsonEscape(cameraName()) + "\"" +
-      ",\"bluetooth\":" + String(cameraMode == CAM_BE80_CLIENT ? "true" : "false") +
-      ",\"scanning\":" + String(be80ScanActive ? "true" : "false") +
-      ",\"autonomous\":" + String(autonomousEnabled ? "true" : "false") +
-      ",\"printer\":\"" + jsonEscape(printerHost) + "\"" +
-      ",\"printer_port\":" + String(printerPort) +
-      ",\"printer_connected\":" + String(printerConnected ? "true" : "false") +
-      ",\"printer_state\":\"" + jsonEscape(printerState) + "\"" +
-      ",\"printer_http_code\":" + String(printerHttpCode) +
-      ",\"shutter_delay_ms\":" + String(stabilizationMs) +
-      ",\"current_layer\":" + String(lastPrinterLayer) +
-      ",\"total_layers\":" + String(printerTotalLayers) +
-      ",\"commands\":" + String(commandCount) +
-      ",\"last_command\":\"" + jsonEscape(lastCommand) + "\"" +
-      ",\"triggers\":" + String(triggerCount) + "}";
-    sendJSON(200, body);
-  });
-  web.on("/trigger", HTTP_POST, [] {
-    commandCount++;
-    if (triggerShutter()) {
-      lastCommand = "shutter_sent";
-      sendJSON(200, "{\"ok\":true,\"triggered\":true}");
-    } else {
-      lastCommand = "shutter_failed";
-      sendJSON(409, "{\"ok\":false,\"error\":\"camera_not_connected\"}");
-    }
-  });
-  web.on("/led-test", HTTP_POST, [] {
-    commandCount++; lastCommand = "led_test";
-    setLedOn(false); delay(225); setLedOn(true); delay(225);
-    setLedOn(false); delay(225); setLedOn(true); delay(225);
-    setLedOn(false); delay(225); setLedOn(true); delay(225);
-    setLedOn(false); delay(225); setLedOn(true); delay(225);
-    sendJSON(200, "{\"ok\":true,\"led\":true}");
-  });
-  web.on("/pair", HTTP_POST, [] {
-    commandCount++; lastCommand = "scan_restart";
-    restartScan();
-    sendJSON(200, "{\"ok\":true,\"scanning\":true}");
-  });
-  web.on("/reset-bonds", HTTP_POST, [] {
-    commandCount++; lastCommand = "bonds_erased";
-    clearBluetoothBonds();
-    sendJSON(200, "{\"ok\":true,\"bondsCleared\":true}");
-  });
-  web.on("/configure", HTTP_POST, [] {
-    String ssid = web.arg("ssid");
-    if (ssid.isEmpty()) {
-      sendJSON(400, "{\"ok\":false,\"error\":\"missing_ssid\"}");
-      return;
-    }
-    preferences.begin("layershot", false);
-    preferences.putString("ssid", ssid);
-    preferences.putString("password", web.arg("password"));
-    preferences.remove("static_ip");
-    preferences.remove("gateway");
-    preferences.remove("netmask");
-    preferences.remove("dns");
-    preferences.end();
-    sendJSON(200, "{\"ok\":true,\"restarting\":true}");
-    delay(500);
-    ESP.restart();
-  });
-  web.on("/camera-config", HTTP_POST, [] {
-    String target = web.arg("camera");
-    if (target != "insta360") {
-      sendJSON(400, "{\"ok\":false,\"error\":\"unsupported_camera\"}");
-      return;
-    }
-    cameraType = target;
-    preferences.begin("layershot", false);
-    preferences.putString("camera", cameraType);
-    preferences.end();
-    sendJSON(200, "{\"ok\":true,\"camera\":\"" + jsonEscape(cameraType) + "\"}");
-  });
-  web.on("/printer-config", HTTP_POST, [] {
-    String host = web.arg("host");
-    if (host.isEmpty()) { sendJSON(400, "{\"ok\":false,\"error\":\"missing_host\"}"); return; }
-    uint16_t newPort = (uint16_t)max(1L, web.arg("port").toInt());
-    uint16_t newEvery = (uint16_t)max(1L, web.arg("every").toInt());
-    uint16_t newSkip = (uint16_t)max(0L, web.arg("skip").toInt());
-    uint16_t newStop = (uint16_t)max(0L, web.arg("stop").toInt());
-    uint16_t newDelay = (uint16_t)max(0L, web.arg("delay").toInt());
-    preferences.begin("layershot", false);
-    preferences.putString("printer", host);
-    preferences.putUShort("port", newPort);
-    preferences.putUShort("every", newEvery);
-    preferences.putUShort("skip", newSkip);
-    preferences.putUShort("stop", newStop);
-    preferences.putUShort("delay", newDelay);
-    preferences.putBool("autonomous", true);
-    preferences.end();
-    printerHost = host;
-    printerPort = newPort;
-    captureEvery = newEvery;
-    skipLayers = newSkip;
-    stopAfterLayer = newStop;
-    stabilizationMs = newDelay;
-    autonomousEnabled = true;
-    lastPrinterLayer = -1;
-    sendJSON(200, "{\"ok\":true,\"autonomous\":true}");
-  });
-  web.on("/printer-test", HTTP_POST, [] {
-    lastPrinterPoll = 0;
-    pollPrinter();
-    if (printerConnected) sendJSON(200, "{\"ok\":true,\"printer\":true}");
-    else sendJSON(503, "{\"ok\":false,\"error\":\"printer_not_found\"}");
-  });
-  web.on("/autonomous-stop", HTTP_POST, [] {
-    autonomousEnabled = false;
-    preferences.begin("layershot", false); preferences.putBool("autonomous", false); preferences.end();
-    sendJSON(200, "{\"ok\":true,\"autonomous\":false}");
-  });
-  web.onNotFound([] { sendJSON(404, "{\"ok\":false,\"error\":\"not_found\"}"); });
-  web.begin();
-}
+// void setupWeb() {                    // WiFi disabled — entire function below
+//   web.on("/", HTTP_GET, [] {
+//     web.send_P(200, "text/html; charset=utf-8", LAYERSHOT_DASHBOARD);
+//   });
+//   web.on("/status", HTTP_GET, [] {
+//     String ip = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
+//     String body = "{\"ok\":true,\"name\":\"" + String(DEVICE_NAME) + "\",\"firmware\":\"" +
+//       FIRMWARE_VERSION + "\",\"hostname\":\"" + deviceHostname + ".local\",\"ip\":\"" + ip +
+//       "\",\"ssid\":\"" + jsonEscape(WiFi.SSID()) + "\",\"rssi\":" + String(WiFi.RSSI()) +
+//       ",\"wifi\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") +
+//       ",\"camera_type\":\"" + jsonEscape(cameraType) + "\"" +
+//       ",\"camera_name\":\"" + jsonEscape(cameraName()) + "\"" +
+//       ",\"bluetooth\":" + String(cameraMode == CAM_BE80_CLIENT ? "true" : "false") +
+//       ",\"scanning\":" + String(be80ScanActive ? "true" : "false") +
+//       ",\"autonomous\":" + String(autonomousEnabled ? "true" : "false") +
+//       ",\"printer\":\"" + jsonEscape(printerHost) + "\"" +
+//       ",\"printer_port\":" + String(printerPort) +
+//       ",\"printer_connected\":" + String(printerConnected ? "true" : "false") +
+//       ",\"printer_state\":\"" + jsonEscape(printerState) + "\"" +
+//       ",\"printer_http_code\":" + String(printerHttpCode) +
+//       ",\"shutter_delay_ms\":" + String(stabilizationMs) +
+//       ",\"current_layer\":" + String(lastPrinterLayer) +
+//       ",\"total_layers\":" + String(printerTotalLayers) +
+//       ",\"commands\":" + String(commandCount) +
+//       ",\"last_command\":\"" + jsonEscape(lastCommand) + "\"" +
+//       ",\"triggers\":" + String(triggerCount) + "}";
+//     sendJSON(200, body);
+//   });
+//   web.on("/trigger", HTTP_POST, [] {
+//     commandCount++;
+//     if (triggerShutter()) {
+//       lastCommand = "shutter_sent";
+//       sendJSON(200, "{\"ok\":true,\"triggered\":true}");
+//     } else {
+//       lastCommand = "shutter_failed";
+//       sendJSON(409, "{\"ok\":false,\"error\":\"camera_not_connected\"}");
+//     }
+//   });
+//   web.on("/led-test", HTTP_POST, [] {
+//     commandCount++; lastCommand = "led_test";
+//     setLedOn(false); delay(225); setLedOn(true); delay(225);
+//     setLedOn(false); delay(225); setLedOn(true); delay(225);
+//     setLedOn(false); delay(225); setLedOn(true); delay(225);
+//     setLedOn(false); delay(225); setLedOn(true); delay(225);
+//     sendJSON(200, "{\"ok\":true,\"led\":true}");
+//   });
+//   web.on("/pair", HTTP_POST, [] {
+//     commandCount++; lastCommand = "scan_restart";
+//     restartScan();
+//     sendJSON(200, "{\"ok\":true,\"scanning\":true}");
+//   });
+//   web.on("/reset-bonds", HTTP_POST, [] {
+//     commandCount++; lastCommand = "bonds_erased";
+//     clearBluetoothBonds();
+//     sendJSON(200, "{\"ok\":true,\"bondsCleared\":true}");
+//   });
+//   web.on("/configure", HTTP_POST, [] {
+//     String ssid = web.arg("ssid");
+//     if (ssid.isEmpty()) {
+//       sendJSON(400, "{\"ok\":false,\"error\":\"missing_ssid\"}");
+//       return;
+//     }
+//     preferences.begin("layershot", false);
+//     preferences.putString("ssid", ssid);
+//     preferences.putString("password", web.arg("password"));
+//     preferences.remove("static_ip");
+//     preferences.remove("gateway");
+//     preferences.remove("netmask");
+//     preferences.remove("dns");
+//     preferences.end();
+//     sendJSON(200, "{\"ok\":true,\"restarting\":true}");
+//     delay(500);
+//     ESP.restart();
+//   });
+//   web.on("/camera-config", HTTP_POST, [] {
+//     String target = web.arg("camera");
+//     if (target != "insta360") {
+//       sendJSON(400, "{\"ok\":false,\"error\":\"unsupported_camera\"}");
+//       return;
+//     }
+//     cameraType = target;
+//     preferences.begin("layershot", false);
+//     preferences.putString("camera", cameraType);
+//     preferences.end();
+//     sendJSON(200, "{\"ok\":true,\"camera\":\"" + jsonEscape(cameraType) + "\"}");
+//   });
+//   web.on("/printer-config", HTTP_POST, [] {
+//     String host = web.arg("host");
+//     if (host.isEmpty()) { sendJSON(400, "{\"ok\":false,\"error\":\"missing_host\"}"); return; }
+//     uint16_t newPort = (uint16_t)max(1L, web.arg("port").toInt());
+//     uint16_t newEvery = (uint16_t)max(1L, web.arg("every").toInt());
+//     uint16_t newSkip = (uint16_t)max(0L, web.arg("skip").toInt());
+//     uint16_t newStop = (uint16_t)max(0L, web.arg("stop").toInt());
+//     uint16_t newDelay = (uint16_t)max(0L, web.arg("delay").toInt());
+//     preferences.begin("layershot", false);
+//     preferences.putString("printer", host);
+//     preferences.putUShort("port", newPort);
+//     preferences.putUShort("every", newEvery);
+//     preferences.putUShort("skip", newSkip);
+//     preferences.putUShort("stop", newStop);
+//     preferences.putUShort("delay", newDelay);
+//     preferences.putBool("autonomous", true);
+//     preferences.end();
+//     printerHost = host;
+//     printerPort = newPort;
+//     captureEvery = newEvery;
+//     skipLayers = newSkip;
+//     stopAfterLayer = newStop;
+//     stabilizationMs = newDelay;
+//     autonomousEnabled = true;
+//     lastPrinterLayer = -1;
+//     sendJSON(200, "{\"ok\":true,\"autonomous\":true}");
+//   });
+//   web.on("/printer-test", HTTP_POST, [] {
+//     lastPrinterPoll = 0;
+//     pollPrinter();
+//     if (printerConnected) sendJSON(200, "{\"ok\":true,\"printer\":true}");
+//     else sendJSON(503, "{\"ok\":false,\"error\":\"printer_not_found\"}");
+//   });
+//   web.on("/autonomous-stop", HTTP_POST, [] {
+//     autonomousEnabled = false;
+//     preferences.begin("layershot", false); preferences.putBool("autonomous", false); preferences.end();
+//     sendJSON(200, "{\"ok\":true,\"autonomous\":false}");
+//   });
+//   web.onNotFound([] { sendJSON(404, "{\"ok\":false,\"error\":\"not_found\"}"); });
+//   web.begin();
+// }
 
 String decodeHex(const String &value) {
   String decoded;
@@ -609,50 +624,51 @@ int jsonIntegerAfter(const String &body, const String &key) {
   return body.substring(position).toInt();
 }
 
-void pollPrinter() {
-  if (!autonomousEnabled || printerHost.isEmpty() || WiFi.status() != WL_CONNECTED || millis() - lastPrinterPoll < 1000) return;
-  lastPrinterPoll = millis();
-  HTTPClient http;
-  String url = "http://" + printerHost + ":" + String(printerPort) + "/printer/objects/query?print_stats&virtual_sdcard&display_status";
-  http.setConnectTimeout(2500);
-  http.setTimeout(3500);
-  if (!http.begin(url)) return;
-  int code = http.GET();
-  printerHttpCode = code;
-  if (code == 200) {
-    String body = http.getString();
-    printerConnected = true;
-    bool printing = body.indexOf("\"state\":\"printing\"") >= 0 || body.indexOf("\"state\": \"printing\"") >= 0;
-    bool virtualSdActive = body.indexOf("\"is_active\":true") >= 0 || body.indexOf("\"is_active\": true") >= 0;
-    bool layerMonitoringActive = printing || virtualSdActive;
-    if (layerMonitoringActive) printerState = "printing";
-    else if (body.indexOf("\"state\":\"paused\"") >= 0 || body.indexOf("\"state\": \"paused\"") >= 0) printerState = "paused";
-    else if (body.indexOf("\"state\":\"complete\"") >= 0 || body.indexOf("\"state\": \"complete\"") >= 0) printerState = "complete";
-    else if (body.indexOf("\"state\":\"cancelled\"") >= 0 || body.indexOf("\"state\": \"cancelled\"") >= 0) printerState = "cancelled";
-    else if (body.indexOf("\"state\":\"standby\"") >= 0 || body.indexOf("\"state\": \"standby\"") >= 0) printerState = "standby";
-    else printerState = "ready";
-    int currentLayer = jsonIntegerAfter(body, "current_layer");
-    if (currentLayer < 0) currentLayer = jsonIntegerAfter(body, "layer");
-    int totalLayers = jsonIntegerAfter(body, "total_layer");
-    if (totalLayers < 0) totalLayers = jsonIntegerAfter(body, "layer_count");
-    if (totalLayers >= 0) printerTotalLayers = totalLayers;
-    if (layerMonitoringActive && currentLayer >= 0 && currentLayer != lastPrinterLayer) {
-      if (lastPrinterLayer >= 0 && currentLayer > lastPrinterLayer && currentLayer > skipLayers &&
-          (currentLayer - skipLayers) % max(1, (int)captureEvery) == 0 &&
-          (stopAfterLayer == 0 || currentLayer <= stopAfterLayer)) {
-        shutterPending = true;
-        shutterDueAt = millis() + stabilizationMs;
-      }
-      lastPrinterLayer = currentLayer;
-    } else if (!layerMonitoringActive) {
-      lastPrinterLayer = -1;
-    }
-  } else {
-    printerConnected = false;
-    printerState = "offline";
-  }
-  http.end();
-}
+// WiFi disabled — pollPrinter removed
+// void pollPrinter() {
+//   if (!autonomousEnabled || printerHost.isEmpty() || WiFi.status() != WL_CONNECTED || millis() - lastPrinterPoll < 1000) return;
+//   lastPrinterPoll = millis();
+//   HTTPClient http;
+//   String url = "http://" + printerHost + ":" + String(printerPort) + "/printer/objects/query?print_stats&virtual_sdcard&display_status";
+//   http.setConnectTimeout(2500);
+//   http.setTimeout(3500);
+//   if (!http.begin(url)) return;
+//   int code = http.GET();
+//   printerHttpCode = code;
+//   if (code == 200) {
+//     String body = http.getString();
+//     printerConnected = true;
+//     bool printing = body.indexOf("\"state\":\"printing\"") >= 0 || body.indexOf("\"state\": \"printing\"") >= 0;
+//     bool virtualSdActive = body.indexOf("\"is_active\":true") >= 0 || body.indexOf("\"is_active\": true") >= 0;
+//     bool layerMonitoringActive = printing || virtualSdActive;
+//     if (layerMonitoringActive) printerState = "printing";
+//     else if (body.indexOf("\"state\":\"paused\"") >= 0 || body.indexOf("\"state\": \"paused\"") >= 0) printerState = "paused";
+//     else if (body.indexOf("\"state\":\"complete\"") >= 0 || body.indexOf("\"state\": \"complete\"") >= 0) printerState = "complete";
+//     else if (body.indexOf("\"state\":\"cancelled\"") >= 0 || body.indexOf("\"state\": \"cancelled\"") >= 0) printerState = "cancelled";
+//     else if (body.indexOf("\"state\":\"standby\"") >= 0 || body.indexOf("\"state\": \"standby\"") >= 0) printerState = "standby";
+//     else printerState = "ready";
+//     int currentLayer = jsonIntegerAfter(body, "current_layer");
+//     if (currentLayer < 0) currentLayer = jsonIntegerAfter(body, "layer");
+//     int totalLayers = jsonIntegerAfter(body, "total_layer");
+//     if (totalLayers < 0) totalLayers = jsonIntegerAfter(body, "layer_count");
+//     if (totalLayers >= 0) printerTotalLayers = totalLayers;
+//     if (layerMonitoringActive && currentLayer >= 0 && currentLayer != lastPrinterLayer) {
+//       if (lastPrinterLayer >= 0 && currentLayer > lastPrinterLayer && currentLayer > skipLayers &&
+//           (currentLayer - skipLayers) % max(1, (int)captureEvery) == 0 &&
+//           (stopAfterLayer == 0 || currentLayer <= stopAfterLayer)) {
+//         shutterPending = true;
+//         shutterDueAt = millis() + stabilizationMs;
+//       }
+//       lastPrinterLayer = currentLayer;
+//     } else if (!layerMonitoringActive) {
+//       lastPrinterLayer = -1;
+//     }
+//   } else {
+//     printerConnected = false;
+//     printerState = "offline";
+//   }
+//   http.end();
+// }
 
 void updateScheduledShutter() {
   if (shutterPending && (int32_t)(millis() - shutterDueAt) >= 0) {
@@ -661,85 +677,86 @@ void updateScheduledShutter() {
   }
 }
 
-void applyPreferredNetwork() {
-  if (preferredIp.isEmpty()) return;
-  IPAddress address, gateway, netmask, dns;
-  if (address.fromString(preferredIp) &&
-      gateway.fromString(preferredGateway) &&
-      netmask.fromString(preferredNetmask) &&
-      dns.fromString(preferredDns)) {
-    WiFi.config(address, gateway, netmask, dns);
-  }
-}
+// WiFi disabled — applyPreferredNetwork removed
+// void applyPreferredNetwork() {
+//   if (preferredIp.isEmpty()) return;
+//   IPAddress address, gateway, netmask, dns;
+//   if (address.fromString(preferredIp) &&
+//       gateway.fromString(preferredGateway) &&
+//       netmask.fromString(preferredNetmask) &&
+//       dns.fromString(preferredDns)) {
+//     WiFi.config(address, gateway, netmask, dns);
+//   }
+// }
 
-void startWiFiServices() {
-  if (!otaReady) {
-    MDNS.begin(deviceHostname.c_str());
-    MDNS.addService("http", "tcp", 80);
-    ArduinoOTA.setHostname(deviceHostname.c_str());
-    ArduinoOTA.setPassword("layershot");
-    ArduinoOTA.begin();
-    otaReady = true;
-  }
-  WiFi.softAPdisconnect(true);
-  wifiError = false;
-}
+// WiFi disabled — startWiFiServices removed
+// void startWiFiServices() {
+//   if (!otaReady) {
+//     MDNS.begin(deviceHostname.c_str());
+//     MDNS.addService("http", "tcp", 80);
+//     ArduinoOTA.setHostname(deviceHostname.c_str());
+//     ArduinoOTA.setPassword("layershot");
+//     ArduinoOTA.begin();
+//     otaReady = true;
+//   }
+//   WiFi.softAPdisconnect(true);
+//   wifiError = false;
+// }
 
-void connectWiFi() {
-  preferences.begin("layershot", true);
-  wifiSsid = preferences.getString("ssid", "");
-  wifiPassword = preferences.getString("password", "");
-  preferredIp = preferences.getString("static_ip", "");
-  preferredGateway = preferences.getString("gateway", "");
-  preferredNetmask = preferences.getString("netmask", "");
-  preferredDns = preferences.getString("dns", "");
-  preferences.end();
+// WiFi disabled — connectWiFi removed
+// void connectWiFi() {
+//   preferences.begin("layershot", true);
+//   wifiSsid = preferences.getString("ssid", "");
+//   wifiPassword = preferences.getString("password", "");
+//   preferredIp = preferences.getString("static_ip", "");
+//   preferredGateway = preferences.getString("gateway", "");
+//   preferredNetmask = preferences.getString("netmask", "");
+//   preferredDns = preferences.getString("dns", "");
+//   preferences.end();
+//
+//   WiFi.setHostname(deviceHostname.c_str());
+//   WiFi.setAutoReconnect(true);
+//   WiFi.persistent(false);
+//   if (!wifiSsid.isEmpty()) {
+//     wifiConnecting = true;
+//     WiFi.mode(WIFI_STA);
+//     applyPreferredNetwork();
+//     WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
+//     uint32_t started = millis();
+//     while (WiFi.status() != WL_CONNECTED && millis() - started < 18000) {
+//       handleSerialProvisioning();
+//       setLedOn(true);
+//       delay(150);
+//       setLedOn(false);
+//       delay(150);
+//     }
+//     wifiConnecting = false;
+//   }
+//   if (WiFi.status() != WL_CONNECTED) {
+//     wifiError = !wifiSsid.isEmpty();
+//     WiFi.mode(WIFI_AP_STA);
+//     WiFi.softAP(SETUP_AP);
+//   } else {
+//     startWiFiServices();
+//   }
+// }
 
-  WiFi.setHostname(deviceHostname.c_str());
-  WiFi.setAutoReconnect(true);
-  WiFi.persistent(false);
-  if (!wifiSsid.isEmpty()) {
-    wifiConnecting = true;
-    WiFi.mode(WIFI_STA);
-    applyPreferredNetwork();
-    WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
-    uint32_t started = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - started < 18000) {
-      // The desktop app provisions the freshly flashed board over USB.
-      // Continue consuming serial data while an older Wi-Fi profile is timing
-      // out, otherwise opening the port repeatedly can reset the C3 forever.
-      handleSerialProvisioning();
-      setLedOn(true);
-      delay(150);
-      setLedOn(false);
-      delay(150);
-    }
-    wifiConnecting = false;
-  }
-  if (WiFi.status() != WL_CONNECTED) {
-    wifiError = !wifiSsid.isEmpty();
-    WiFi.mode(WIFI_AP_STA);
-    WiFi.softAP(SETUP_AP);
-  } else {
-    startWiFiServices();
-  }
-}
-
-void maintainWiFi() {
-  if (WiFi.status() == WL_CONNECTED) {
-    if (!otaReady) startWiFiServices();
-    return;
-  }
-  if (wifiSsid.isEmpty() || millis() - lastWiFiReconnectAttempt < 10000) return;
-  lastWiFiReconnectAttempt = millis();
-  wifiConnecting = true;
-  WiFi.mode(WIFI_AP_STA);
-  applyPreferredNetwork();
-  WiFi.disconnect(false, false);
-  WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
-  wifiConnecting = false;
-  wifiError = true;
-}
+// WiFi disabled — maintainWiFi removed
+// void maintainWiFi() {
+//   if (WiFi.status() == WL_CONNECTED) {
+//     if (!otaReady) startWiFiServices();
+//     return;
+//   }
+//   if (wifiSsid.isEmpty() || millis() - lastWiFiReconnectAttempt < 10000) return;
+//   lastWiFiReconnectAttempt = millis();
+//   wifiConnecting = true;
+//   WiFi.mode(WIFI_AP_STA);
+//   applyPreferredNetwork();
+//   WiFi.disconnect(false, false);
+//   WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
+//   wifiConnecting = false;
+//   wifiError = true;
+// }
 
 void updateButton() {
   bool pressed = digitalRead(PAIR_BUTTON_PIN) == LOW;
@@ -811,21 +828,23 @@ void setup() {
   deviceHostname = preferences.getString("hostname", HOSTNAME);
   autonomousEnabled = preferences.getBool("autonomous", false);
   preferences.end();
-  connectWiFi();
-  setupWeb();
+  // WiFi disabled — Bluetooth shutter only mode
+  // connectWiFi();
+  // setupWeb();
 
   Serial.printf("%s %s\n", BLE_NAME, FIRMWARE_VERSION);
 }
 
 void loop() {
   handleSerialProvisioning();
-  maintainWiFi();
-  web.handleClient();
-  if (otaReady) ArduinoOTA.handle();
+  // WiFi disabled — no web/WiFi/OTA/printer calls
+  // maintainWiFi();
+  // web.handleClient();
+  // if (otaReady) ArduinoOTA.handle();
   updateButton();
   updateLED();
   maintainCameraClient();
-  pollPrinter();
+  // pollPrinter();
   updateScheduledShutter();
   delay(5);
 }

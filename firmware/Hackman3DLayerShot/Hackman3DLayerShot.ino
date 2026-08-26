@@ -539,8 +539,9 @@ void setup() {
   }
   autonomousEnabled = preferences.getBool("autonomous", false);
   preferences.end();
-  connectWiFi();
-  setupWeb();
+  // WiFi disabled — Bluetooth shutter only mode (lower power, less heat)
+  // connectWiFi();
+  // setupWeb();
   Serial.printf("%s %s\n", BLE_NAME, FIRMWARE_VERSION);
 }
 
@@ -548,12 +549,12 @@ void loop() {
   bleConnected = bleKeyboard.isPaired();
   if (bleConnected) pairingMode = false;
   handleSerialProvisioning();
-  maintainWiFi();
-  web.handleClient();
-  if (otaReady) ArduinoOTA.handle();
+  // maintainWiFi();
+  // web.handleClient();
+  // if (otaReady) ArduinoOTA.handle();
   updateButton();
   updateLED();
-  pollPrinter();
+  // pollPrinter();
   updateScheduledShutter();
   delay(5);
 }
